@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>F.R.E.Q. - Harmonic Systems (Enhanced)</title>
+    <title>F.R.E.Q. - Harmonic Systems (WebGL Enhanced)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;600&family=Syncopate:wght@700&display=swap');
@@ -76,16 +76,20 @@
 
         #tuner-container {
             width: 100%;
-            height: 250px;
+            height: 280px;
             display: flex;
             align-items: center;
             justify-content: center;
             position: relative;
+            border-radius: 2rem;
+            overflow: hidden;
+            background: rgba(0,0,0,0.3);
         }
 
         canvas {
             max-width: 100%;
             height: auto;
+            display: block;
         }
 
         .mode-btn {
@@ -111,25 +115,6 @@
             font-weight: 100;
             text-shadow: 0 0 30px rgba(255,255,255,0.2);
             transition: all 0.3s ease;
-        }
-
-        .psychedelic-overlay {
-            position: fixed;
-            inset: 0;
-            z-index: 10;
-            pointer-events: none;
-            mix-blend-mode: overlay;
-            opacity: 0;
-            transition: opacity 1s ease;
-            background: linear-gradient(45deg, #ff00ff, #00ffff, #ff0000, #ffff00);
-            background-size: 400% 400%;
-            animation: gradient-move 10s infinite linear;
-        }
-
-        @keyframes gradient-move {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
         }
 
         .scan-overlay {
@@ -161,7 +146,6 @@
 </head>
 <body>
 
-    <div class="psychedelic-overlay" id="psy-overlay"></div>
     <div class="sensual-glow" style="top: 10%; left: 10%;"></div>
     <div class="sensual-glow" style="bottom: 10%; right: 10%; background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, transparent 70%);"></div>
 
@@ -224,7 +208,7 @@
     <div class="max-w-xl w-full p-12 rounded-[4rem] glass-panel flex flex-col items-center relative overflow-hidden">
         <div class="scan-overlay"></div>
         
-        <div class="flex gap-4 mb-8">
+        <div class="flex gap-4 mb-8 flex-wrap justify-center">
             <button class="mode-btn active" data-mode="needle">Speedometer</button>
             <button class="mode-btn" data-mode="spectrogram">Spectrogram</button>
             <button class="mode-btn" data-mode="equalizer">Equalizer</button>
@@ -250,12 +234,12 @@
         let audioCtx, analyser, isRunning = false;
         const A4 = 432;
         let currentMode = 'needle';
+        const PHI = (1 + Math.sqrt(5)) / 2; // Golden Ratio
 
         const canvas = document.getElementById('tuner-canvas');
         const ctx = canvas.getContext('2d');
         const noteDisplay = document.getElementById('note-display');
         const freqLabel = document.getElementById('freq-val');
-        const psyOverlay = document.getElementById('psy-overlay');
 
         let targetRotation = 0;
         let currentRotation = 0;
@@ -263,6 +247,12 @@
         let currentFreq = 0;
         let centsLerp = 0;
         let amplitude = 0;
+
+        // WebGL Context for Psychedelic
+        let glCanvas = null;
+        let gl = null;
+        let glProgram = null;
+        let glTime = 0;
 
         // Spectrogram buffer
         const specCanvas = document.createElement('canvas');
@@ -276,7 +266,10 @@
                 document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 currentMode = btn.dataset.mode;
-                psyOverlay.style.opacity = currentMode === 'psychedelic' ? '0.3' : '0';
+                
+                if (currentMode === 'psychedelic' && !gl) {
+                    initWebGL();
+                }
             });
         });
 
@@ -300,6 +293,147 @@
             }
         });
 
+        function initWebGL() {
+            glCanvas = document.createElement('canvas');
+            glCanvas.width = canvas.width;
+            glCanvas.height = canvas.height;
+            gl = glCanvas.getContext('webgl2', { antialias: true, alpha: true });
+            
+            if (!gl) {
+                console.warn('WebGL2 not supported, falling back to WebGL');
+                gl = glCanvas.getContext('webgl', { antialias: true, alpha: true });
+            }
+
+            const vertexShader = `
+                precision highp float;
+                attribute vec2 position;
+                void main() {
+                    gl_Position = vec4(position, 0.0, 1.0);
+                }
+            `;
+
+            const fragmentShader = `
+                precision highp float;
+                uniform float time;
+                uniform float amplitude;
+                uniform vec2 resolution;
+                
+                const float PHI = 1.618033988749895;
+                const float TAU = 6.283185307179586;
+                
+                float goldenRatio(vec2 p) {
+                    float angle = atan(p.y, p.x);
+                    float radius = length(p);
+                    float spiral = angle + radius / PHI;
+                    return sin(spiral * 0.5) * 0.5 + 0.5;
+                }
+                
+                float mushroom(vec2 p, float scale) {
+                    float dist = length(p);
+                    float angle = atan(p.y, p.x);
+                    float mushroom = sin(dist * scale - time * 2.0) * cos(angle * 3.0);
+                    return mushroom * 0.5 + 0.5;
+                }
+                
+                vec3 goldenColor(float t) {
+                    float h = mod(t + time * 0.3, 1.0);
+                    float s = 0.8 + amplitude * 0.2;
+                    float l = 0.5 + sin(time * 0.5) * 0.2;
+                    
+                    vec3 rgb;
+                    if (h < 0.166) {
+                        rgb = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), h * 6.0);
+                    } else if (h < 0.333) {
+                        rgb = mix(vec3(1.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0), (h - 0.166) * 6.0);
+                    } else if (h < 0.5) {
+                        rgb = mix(vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 1.0), (h - 0.333) * 6.0);
+                    } else if (h < 0.666) {
+                        rgb = mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 0.0, 1.0), (h - 0.5) * 6.0);
+                    } else if (h < 0.833) {
+                        rgb = mix(vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 1.0), (h - 0.666) * 6.0);
+                    } else {
+                        rgb = mix(vec3(1.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0), (h - 0.833) * 6.0);
+                    }
+                    
+                    return rgb * l;
+                }
+                
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / resolution;
+                    vec2 p = (uv - 0.5) * 2.0;
+                    p.x *= resolution.x / resolution.y;
+                    
+                    // Infinite zoom effect
+                    float zoom = 1.0 + sin(time * 0.5) * 0.3;
+                    p *= zoom;
+                    
+                    // Rotate based on golden ratio
+                    float angle = time * 0.3 + length(p) * PHI;
+                    float c = cos(angle);
+                    float s = sin(angle);
+                    p = vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+                    
+                    // Layer multiple golden spirals
+                    float layer1 = goldenRatio(p);
+                    float layer2 = goldenRatio(p * PHI);
+                    float layer3 = goldenRatio(p / PHI);
+                    
+                    // Mushroom effect
+                    float mushVal = mushroom(p, 3.0 + amplitude * 5.0);
+                    
+                    // Combine layers
+                    float val = layer1 * 0.4 + layer2 * 0.3 + layer3 * 0.2 + mushVal * 0.1;
+                    val = smoothstep(0.2, 0.8, val);
+                    
+                    // Radial glow
+                    float glow = 1.0 / (1.0 + length(p) * 2.0);
+                    val += glow * 0.3;
+                    
+                    // Golden color mapping
+                    vec3 col = goldenColor(val);
+                    
+                    // Add sensual pulsing
+                    col *= 0.8 + amplitude * 0.4 + sin(time) * 0.2;
+                    
+                    gl_FragColor = vec4(col, val * 0.9);
+                }
+            `;
+
+            glProgram = createProgram(gl, vertexShader, fragmentShader);
+            gl.useProgram(glProgram);
+
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                -1, -1, 1, -1, -1, 1, 1, 1
+            ]), gl.STATIC_DRAW);
+
+            const positionLocation = gl.getAttribLocation(glProgram, 'position');
+            gl.enableVertexAttribArray(positionLocation);
+            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+        }
+
+        function createProgram(gl, vertexSource, fragmentSource) {
+            const vertex = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertex, vertexSource);
+            gl.compileShader(vertex);
+
+            const fragment = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragment, fragmentSource);
+            gl.compileShader(fragment);
+
+            const program = gl.createProgram();
+            gl.attachShader(program, vertex);
+            gl.attachShader(program, fragment);
+            gl.linkProgram(program);
+
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error('Program link error:', gl.getProgramInfoLog(program));
+            }
+
+            return program;
+        }
+
         function renderLoop() {
             if (!isRunning) return;
 
@@ -307,7 +441,7 @@
             analyser.getFloatTimeDomainData(buffer);
             const freq = autoCorrelate(buffer, audioCtx.sampleRate);
 
-            // Calculate RMS for amplitude/sensuality effects
+            // Calculate RMS for amplitude
             let sum = 0;
             for(let i=0; i<buffer.length; i++) sum += buffer[i]*buffer[i];
             amplitude = Math.sqrt(sum/buffer.length);
@@ -338,6 +472,7 @@
             if (currentFreq > 10) freqLabel.innerText = currentFreq.toFixed(1) + " HZ";
 
             draw();
+            glTime += 0.016;
             requestAnimationFrame(renderLoop);
         }
 
@@ -447,21 +582,24 @@
         }
 
         function drawPsychedelic() {
-            const buffer = new Float32Array(analyser.fftSize);
-            analyser.getFloatTimeDomainData(buffer);
-            
-            ctx.translate(canvas.width / 2, canvas.height / 2);
-            const time = Date.now() * 0.001;
-            
-            for (let i = 0; i < 100; i += 2) {
-                const val = buffer[i] * 200;
-                ctx.rotate(time * 0.01 + i);
-                ctx.beginPath();
-                ctx.ellipse(val, val, 50 + val, 20 + val, Math.PI / 4, 0, Math.PI * 2);
-                ctx.strokeStyle = `hsla(${(i * 5 + time * 50) % 360}, 100%, 50%, 0.3)`;
-                ctx.stroke();
+            if (!gl) {
+                initWebGL();
             }
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+            // Update uniforms
+            const timeLocation = gl.getUniformLocation(glProgram, 'time');
+            const amplitudeLocation = gl.getUniformLocation(glProgram, 'amplitude');
+            const resolutionLocation = gl.getUniformLocation(glProgram, 'resolution');
+
+            gl.uniform1f(timeLocation, glTime);
+            gl.uniform1f(amplitudeLocation, amplitude);
+            gl.uniform2f(resolutionLocation, glCanvas.width, glCanvas.height);
+
+            gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            // Copy WebGL canvas to main canvas
+            ctx.drawImage(glCanvas, 0, 0);
         }
 
         function updateVisuals(note, inTune) {
